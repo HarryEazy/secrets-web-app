@@ -4,15 +4,15 @@
 // require dotenv asap, no variable needs to be assigned to it
 require('dotenv').config();
 
-// modules
-// bcrypt encryption module
-// saltrounds is the amount of times to salt pwd
+
 const express = require('express'),
-      bodyParser = require('body-parser'),
-      ejs = require('ejs'),
-      mongoose = require('mongoose'),
-      bcrypt = require('bcrypt');
-      saltRounds = 10;
+    bodyParser = require('body-parser'),
+    ejs = require('ejs'),
+    mongoose = require('mongoose'),
+    session = require('express-session'),
+    passport = require('passport'),
+    passportLocalMongoose = require('passport-local-mongoose');
+
 
 
 
@@ -20,23 +20,36 @@ const express = require('express'),
 const app = express();
 
 // set template engine to ejs
-app.set( 'view engine', 'ejs' );
+app.set('view engine', 'ejs');
 
 // use bodyParser to pass the requests
 app.use(bodyParser.urlencoded({
-  extended: true
+    extended: true
 }));
 
 // use public directory to store static files like images
-app.use(express.static( 'public' ));
+app.use(express.static('public'));
+
+app.use(session({
+    secret: 'Our little secret',
+    resave: false,
+    saveUninitialized: false
+}));
+
+// init passport
+app.use(passport.initialize());
+// use passport for managing the session
+app.use(passport.session());
 
 // if no DB of name already exist, create DB & connect to it
 // if exist connect to the DB
-mongoose.connect( 'mongodb://localhost:27017/userDB', {
+mongoose.connect('mongodb://localhost:27017/userDB', {
     // to prevent warnings
     useNewUrlParser: true,
     useUnifiedTopology: true
 });
+// to fix -> DeprecationWarning: collection.ensureIndex is deprecated.
+mongoose.set('useCreateIndex', true);
 
 // create schema
 const userSchema = new mongoose.Schema({
@@ -44,88 +57,99 @@ const userSchema = new mongoose.Schema({
     password: String
 });
 
-// add encrypt functionality to our schema using plugin
-// userSchema.plugin( encrypt, {secret: process.env.SECRET, encryptedFields: ['password']} );
-
+// use to hash & salt Pwd's and save users into mongoDB
+userSchema.plugin(passportLocalMongoose);
 
 
 
 
 // create mongoose model/collection based on the schema
-const User = new mongoose.model( 'User', userSchema );
+const User = new mongoose.model('User', userSchema);
+
+passport.use(User.createStrategy());
+
+passport.serializeUser(User.serializeUser());
+passport.deserializeUser(User.deserializeUser());
 
 
-app.post('/register', function( req, res ){
+app.post('/register', function(req, res) {
+    User.register({
+       username: req.body.username
+    }, req.body.password, function(err, user) {
+        if (err) {
+            console.log(err);
+            res.redirect('register');
+        } else {
+            // use passport to authenticate user
+            // check to see if user is logged in
+            passport.authenticate('local')(req, res, function() {
+                res.redirect('/secrets');
+            });
 
-  // bcrypt hash function, cb function hash is the pwd hashed
-  bcrypt.hash(req.body.password, saltRounds, function( err, hash ){
-    const newUser = new User({
-      email: req.body.username,
-      password: hash
+        }
+
     });
-
-    newUser.save(function( err ){
-      if( err ){
-        console.log( err );
-      } else {
-        res.render( 'secrets' );
-      }
-    });
-  });
-
 
 });
 
-app.post( '/login', function( req, res ){
-  const username = req.body.username;
-  const password = req.body.password;
+app.post('/login', function(req, res) {
 
-  User.findOne({email:username}, function( err, foundUser ){
+  // create new user
+  const user  = new User({
+    username: req.body.username,
+    password: req.body.password
+  });
 
-    if( err ){
-      console.log( err );
+  req.login(user, function(err){
+    if(err){
+      console.log(err);
+    // if user found
     } else {
-
-      if(foundUser){
-        // use bcrypt compare function to compare hash with plain text pwd
-        bcrypt.compare( password, foundUser.password, function( err, result ){
-          // if result is true render secrets page 
-          if( result ){
-            res.render( 'secrets' );
-          }
-
-        });
-
-
-      }
+      // authenticate user
+      passport.authenticate('local')(req, res, function() {
+          res.redirect('/secrets');
+      });
     }
   });
+
+
+
 });
 
 
 
 
-
-
-app.get( '/', function( req, res ){
-  res.render( 'home' );
+app.get('/', function(req, res) {
+    res.render('home');
 });
 
-app.get( '/login', function( req, res ){
-  res.render( 'login' );
-});
-
-
-app.get( '/register', function( req, res ){
-  res.render( 'register' );
+app.get('/login', function(req, res) {
+    res.render('login');
 });
 
 
+app.get('/register', function(req, res) {
+    res.render('register');
+});
 
+app.get('/secrets', function(req, res) {
+    // check if user is authenticated (logged in)
+    // if true then we can safely render secrets page
+    if (req.isAuthenticated()) {
+        res.render('secrets');
+        // redirect user to register page as user was not authenticated
+    } else {
+        res.redirect('register');
+    }
+});
 
+app.get('/logout', function(req, res){
+  req.logout();
+  res.redirect('/');
+});
 
 
 // connect to port 3000
 app.listen(3000, function() {
-  console.log('Server started on port 3000');
+    console.log('Server started on port 3000');
 });
